@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MAVRS — Service Finder</title>
+
+<!-- Leaflet (map) -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+<style>
+  :root{
+    --bg:#0d0f13; --panel:#15171d; --line:#2a2e36; --text:#e6e7ea;
+    --accent:#ff9800; --accentBorder:#d18000;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+  .wrap{max-width:1100px;margin:0 auto;padding:14px}
+  h1{font-size:20px;margin:8px 0 12px 0}
+  .grid{display:grid;grid-template-columns: 1fr 1fr; gap:12px}
+  @media (max-width: 900px){ .grid{grid-template-columns:1fr} }
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .card > .head{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+  .row > *{flex:1 1 160px}
+  label{font-size:12px;color:#9aa3b2;display:block;margin-bottom:6px}
+  input,select,button{width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:#0a0c10;color:var(--text)}
+  button{background:var(--accent); border:1px solid var(--accentBorder); color:#1a1100; font-weight:600; cursor:pointer}
+  button.secondary{background:#0a0c10;color:var(--text);border-color:var(--line)}
+  .foot{padding:10px 12px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:8px}
+  #map{height:520px;width:100%}
+  .list{max-height:500px;overflow:auto}
+  .item{padding:10px 12px;border-top:1px solid var(--line);display:grid;grid-template-columns:1fr auto;gap:6px}
+  .item:first-child{border-top:none}
+  .name{font-weight:600}
+  .muted{color:#93a0b5;font-size:12px}
+  .pill{font-size:12px; padding:2px 8px; background:#0a0c10; border:1px solid var(--line); border-radius:999px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>MAVRS — Nearby Providers</h1>
+
+  <div class="grid">
+    <!-- Controls + List -->
+    <div class="card">
+      <div class="head">
+        <div class="pill" id="svc-pill">service: —</div>
+        <div class="pill" id="radius-pill">radius: 40km</div>
+      </div>
+      <div style="padding:12px">
+        <div class="row">
+          <div>
+            <label>Service</label>
+            <select id="service">
+              <option value="towing">towing</option>
+              <option value="mechanic">mechanic</option>
+              <option value="tire">tire</option>
+              <option value="jump">jump</option>
+              <option value="fuel">fuel</option>
+            </select>
+          </div>
+          <div>
+            <label>Radius (km)</label>
+            <input id="radius" type="number" min="1" max="100" value="40" />
+          </div>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <div>
+            <label>Latitude</label>
+            <input id="lat" type="number" step="0.000001" placeholder="e.g. 32.7767" />
+          </div>
+          <div>
+            <label>Longitude</label>
+            <input id="lng" type="number" step="0.000001" placeholder="-96.7970" />
+          </div>
+        </div>
+      </div>
+      <div class="foot">
+        <button class="secondary" id="geo">Use my location</button>
+        <button id="find">Find providers</button>
+      </div>
+      <div class="list" id="list"></div>
+    </div>
+
+    <!-- Map -->
+    <div class="card">
+      <div class="head">Map</div>
+      <div id="map"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ==== API base: auto-detect when hosted on Pages/custom domain; else use fallback ====
+  const DEFAULT_API_BASE = "https://YOUR-PAGES-PROJECT.pages.dev"; // <-- replace after first deploy
+  const API_BASE =
+    (location.hostname.endsWith(".pages.dev") || location.hostname.endsWith(".mavrs.com"))
+      ? location.origin
+      : DEFAULT_API_BASE;
+
+  // Derive service from ?service= or from path (…/products/towing-services)
+  function deriveService(){
+    const url = new URL(location.href);
+    const qs = (url.searchParams.get("service") || "").trim().toLowerCase();
+    if (qs) return qs;
+    const parts = location.pathname.split("/").filter(Boolean);
+    const last = parts[parts.length - 1] || "";
+    return last.replace(/-services?$/,"").toLowerCase() || "towing";
+  }
+
+  const serviceSel = document.getElementById("service");
+  const radiusEl = document.getElementById("radius");
+  const latEl = document.getElementById("lat");
+  const lngEl = document.getElementById("lng");
+  const list = document.getElementById("list");
+  const svcPill = document.getElementById("svc-pill");
+  const radPill = document.getElementById("radius-pill");
+
+  const initService = deriveService();
+  [...serviceSel.options].forEach(o => { if (o.value === initService) o.selected = true; });
+  svcPill.textContent = "service: " + serviceSel.value;
+  serviceSel.addEventListener("change", () => svcPill.textContent = "service: " + serviceSel.value);
+  radiusEl.addEventListener("input", () => radPill.textContent = "radius: " + (radiusEl.value||40) + "km");
+
+  // Map
+  const map = L.map('map',{ zoomControl:true, scrollWheelZoom:true });
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ maxZoom:19, attribution:'&copy; OpenStreetMap' }).addTo(map);
+  let centerMarker = null; const providerMarkers = [];
+  function setCenter(lat,lng){
+    if (centerMarker) map.removeLayer(centerMarker);
+    centerMarker = L.circle([lat,lng], { radius: 30, color:'#2a2e36', fillColor:'#ff9800', fillOpacity:0.7 }).addTo(map);
+  }
+  function fitAll(boundsList){
+    if (!boundsList.length){ map.setView([32.7767, -96.7970], 11); return; }
+    const b = boundsList.reduce((acc,b)=> acc.extend(b), L.latLngBounds(boundsList[0]));
+    map.fitBounds(b, { padding:[20,20] });
+  }
+  function clearProviders(){ providerMarkers.forEach(m=>map.removeLayer(m)); providerMarkers.length=0; list.innerHTML=""; }
+
+  async function fetchProviders(){
+    const svc = serviceSel.value;
+    const r = Math.max(1, Number(radiusEl.value || 40));
+    const lat = Number(latEl.value);
+    const lng = Number(lngEl.value);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)){ alert("Please enter a valid lat/lng (or click 'Use my location')."); return; }
+    const url = `${API_BASE}/api/providers/nearby?lat=${lat}&lng=${lng}&service=${encodeURIComponent(svc)}&radius_km=${r}&max_results=10&max_geocodes=400`;
+    const resp = await fetch(url);
+    const data = await resp.json();
+
+    clearProviders(); setCenter(lat,lng);
+    const bounds = [L.latLng(lat,lng)];
+    (data.providers||[]).forEach(p => {
+      const m = L.marker([p.lat, p.lng]).addTo(map);
+      m.bindPopup(`<strong>${p.company_name}</strong><br>${p.address || (p.city+', '+p.state)}<br>${p.phone}<br><span class="muted">${p.distance_km} km</span>`);
+      providerMarkers.push(m); bounds.push(L.latLng(p.lat, p.lng));
+      const row = document.createElement("div");
+      row.className="item";
+      row.innerHTML = `
+        <div>
+          <div class="name">${p.company_name}</div>
+          <div class="muted">${p.address || (p.city+', '+p.state)}</div>
+          <div class="muted">${p.phone}</div>
+        </div>
+        <div style="text-align:right">
+          <div class="pill">${p.distance_km} km</div>
+          <div class="muted" style="margin-top:6px">Base $${p.base_fee} · $${p.per_mile}/mi</div>
+        </div>`;
+      list.appendChild(row);
+      row.onclick = () => { map.setView([p.lat,p.lng], 14); m.openPopup(); };
+    });
+
+    if (data.map_hint?.center){ const c = data.map_hint.center; setCenter(c.lat,c.lng); bounds.push(L.latLng(c.lat,c.lng)); }
+    fitAll(bounds);
+  }
+
+  document.getElementById("find").addEventListener("click", fetchProviders);
+  document.getElementById("geo").addEventListener("click", () => {
+    if (!navigator.geolocation){ alert("Geolocation not supported"); return; }
+    navigator.geolocation.getCurrentPosition(
+      pos => { latEl.value = pos.coords.latitude.toFixed(6); lngEl.value = pos.coords.longitude.toFixed(6); fetchProviders(); },
+      err => alert("Location error: " + err.message),
+      { enableHighAccuracy:true, timeout:10000 }
+    );
+  });
+
+  // Auto-locate once
+  if (navigator.geolocation){
+    navigator.geolocation.getCurrentPosition(
+      pos => { latEl.value = pos.coords.latitude.toFixed(6); lngEl.value = pos.coords.longitude.toFixed(6); setCenter(pos.coords.latitude,pos.coords.longitude); map.setView([pos.coords.latitude,pos.coords.longitude],12); },
+      _ => { map.setView([32.7767,-96.7970], 11); }
+    );
+  } else { map.setView([32.7767,-96.7970], 11); }
+</script>
+</body>
+</html>

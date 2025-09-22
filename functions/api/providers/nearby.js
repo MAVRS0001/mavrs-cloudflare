@@ -94,10 +94,10 @@ function corsJson(obj, status = 200) {
 
 function normalizeE164Maybe(num) {
   if (!num) return "";
-  let p = String(num).trim().replace(/[()\\s,-]/g, "");
+  let p = String(num).trim().replace(/[()\s,-]/g, ""); // NOTE: \s (whitespace) is not double-escaped
   if (p.startsWith("+")) return p;
   if (p.startsWith("00")) return "+" + p.slice(2);
-  if (/^\\d+$/.test(p)) return "+" + p;
+  if (/^\d+$/.test(p)) return "+" + p;
   return p;
 }
 
@@ -129,7 +129,7 @@ function stateAbbrev(s){
 
 // CSV parser (handles quoted cells with commas)
 function parseCsv(text){
-  const lines = text.replace(/\\r/g,"").split("\\n").filter(l=>l.trim().length>0);
+  const lines = text.replace(/\r/g,"").split("\n").filter(l=>l.trim().length>0);
   if (lines.length===0) return [];
   const split = line => {
     const cells = [];
@@ -153,19 +153,31 @@ function parseCsv(text){
 
 async function loadProviders(csvUrl, debug){
   const cached = providerCache.get(csvUrl);
-  if (cached && Date.now() - cached.at < PROVIDER_CACHE_TTL_MS) { debug.cache="hit"; return cached.rows; }
+  if (cached && Date.now() - cached.at < PROVIDER_CACHE_TTL_MS) { debug.cache="hit"; debug.rawCount = cached.rawCount ?? 0; return cached.rows; }
   const resp = await fetch(csvUrl, { redirect: "follow" });
   if (!resp.ok) throw new Error(`CSV HTTP ${resp.status}`);
   const csvText = await resp.text();
   const records = parseCsv(csvText);
 
   const rows = [];
-  for (const r of records){
-    const active = firstVal(r, ["active","Active","is_active","Is Active","enabled","Enabled","status","Status"]);
-    if (looksFalse(active)) continue;
+  let skippedNoPhone = 0, skippedInactive = 0;
 
-    const phone = normalizeE164Maybe(firstVal(r, ["phone","Phone","phone_number","Phone Number","PhoneNumber","Mobile","Mobile Phone","Primary Phone","PrimaryPhone"]));
-    if (!phone) continue;
+  for (const r of records){
+    // Active logic (default active unless explicitly false)
+    const active = firstVal(r, [
+      "active","Active","is_active","Is Active","enabled","Enabled","status","Status"
+    ]);
+    if (looksFalse(active)) { skippedInactive++; continue; }
+
+    // Phone (more header aliases)
+    const phone = normalizeE164Maybe(firstVal(r, [
+      "phone","Phone","phone_number","Phone Number","PhoneNumber",
+      "Mobile","Mobile Phone","Primary Phone","PrimaryPhone",
+      "Phone 1","Phone1","Business Phone","BusinessPhone",
+      "Contact","Contact Number","ContactNumber","Company Phone","CompanyPhone",
+      "Main Phone","MainPhone","Telephone","Tel","TEL","Work Phone","WorkPhone"
+    ]));
+    if (!phone) { skippedNoPhone++; continue; }
 
     const addr1 = firstVal(r, ["address","Address","street","Street","Address 1","Address1","Street Address","StreetAddress","Full Address","FullAddress"]);
     const city = firstVal(r, ["city","City"]);
@@ -182,8 +194,13 @@ async function loadProviders(csvUrl, debug){
 
     rows.push({ name, phone, address, city, state, lat, lng, base_fee, per_mile });
   }
-  providerCache.set(csvUrl, { at: Date.now(), rows });
+
+  providerCache.set(csvUrl, { at: Date.now(), rows, rawCount: records.length });
   debug.loaded = rows.length;
+  debug.rawCount = records.length;
+  debug.headers = Object.keys(records[0] || {});
+  debug.skippedNoPhone = skippedNoPhone;
+  debug.skippedInactive = skippedInactive;
   return rows;
 }
 
@@ -233,7 +250,12 @@ async function reverseGeocodeAdminArea(lat, lng, GMAPS_GEOCODING_KEY) {
 async function nearestProviders(rows, pickLat, pickLng, radiusKm, k, geocodeBudget, GMAPS_GEOCODING_KEY, debug){
   const dedup = [];
   const seen = new Set();
-  for (const r of rows){ const p = normalizeE164Maybe(r.phone); if (!p || seen.has(p)) continue; seen.add(p); dedup.push({ ...r, phone:p }); }
+  for (const r of rows){
+    const p = normalizeE164Maybe(r.phone);
+    if (!p || seen.has(p)) continue;
+    seen.add(p);
+    dedup.push({ ...r, phone:p });
+  }
   debug.deduped = dedup.length;
 
   const withCoords = [], withoutCoords = [];

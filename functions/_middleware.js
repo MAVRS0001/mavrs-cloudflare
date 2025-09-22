@@ -1,31 +1,39 @@
-﻿function corsHeaders(request) {
-  const origin = request.headers.get("Origin") || "*";
-  return {
-    "Access-Control-Allow-Origin": origin,   // use "*" if you prefer
-    "Vary": "Origin",
-    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    "Access-Control-Max-Age": "86400",
-  };
-}
+﻿/**
+ * Global CORS middleware for Cloudflare Pages Functions.
+ * Adds ACAO headers and handles OPTIONS preflight.
+ */
+export async function onRequest({ request, next }) {
+  const origin = request.headers.get("Origin");
+  const allowOrigin = origin || "*"; // reflect caller, or use "*" for simple cases
 
-export const onRequestOptions = async ({ request }) => {
-  // Handle CORS preflight
-  return new Response(null, { headers: corsHeaders(request) });
-};
+  // Preflight
+  if (request.method === "OPTIONS") {
+    const reqHdrs =
+      request.headers.get("Access-Control-Request-Headers") ||
+      "Content-Type, Authorization";
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": allowOrigin,
+        "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+        "Access-Control-Allow-Headers": reqHdrs,
+        "Access-Control-Max-Age": "86400",
+        "Vary": "Origin, Access-Control-Request-Headers"
+      },
+    });
+  }
 
-export const onRequest = async (context) => {
-  // Run the matched function/route first
-  const response = await context.next();
+  // Normal request
+  const res = await next();
+  const headers = new Headers(res.headers);
+  headers.set("Access-Control-Allow-Origin", allowOrigin);
+  headers.set("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  headers.append("Vary", "Origin");
 
-  // Append CORS headers to every response
-  const headers = new Headers(response.headers);
-  const extra = corsHeaders(context.request);
-  for (const [k, v] of Object.entries(extra)) headers.set(k, v);
-
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
+  return new Response(res.body, {
+    status: res.status,
+    statusText: res.statusText,
     headers,
   });
-};
+}

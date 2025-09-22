@@ -1,11 +1,12 @@
-// /admin/reload-providers — clear in-memory caches (best-effort)
-const providerCache = globalThis.__PROV_CACHE__ || (globalThis.__PROV_CACHE__ = new Map());
+import { corsJson, clearProviderCache } from "../_lib/state.js";
 
-export const onRequestPost = async () => {
+export const onRequestPost = async ({ request }) => {
   try {
-    providerCache.clear?.();
-  } catch(_){}
-  return new Response(JSON.stringify({ ok: true }), {
-    headers: { "content-type": "application/json", "access-control-allow-origin": "*" }
-  });
+    const body = await request.json().catch(() => ({}));
+    const service = String(body.service || "*").toLowerCase();
+    const res = clearProviderCache(service);
+    return corsJson({ ok: true, service, ...res });
+  } catch (e) {
+    return corsJson({ ok: false, error: String(e) }, 500);
+  }
 };

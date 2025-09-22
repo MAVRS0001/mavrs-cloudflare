@@ -1,24 +1,23 @@
-// /api/offers — return current offers for a jobId
-const offersByJob = globalThis.__OFFERS__ || (globalThis.__OFFERS__ = new Map());
+import { corsJson, offersByJob } from "../../_lib/state.js";
 
 export const onRequestGet = async ({ request }) => {
   const url = new URL(request.url);
   const jobId = String(url.searchParams.get("jobId") || "");
-  if (!jobId) return json({ error: "jobId required" }, 400);
-  const offers = offersByJob.get(jobId) || [];
+  const offers = Array.isArray(offersByJob.get(jobId)) ? offersByJob.get(jobId) : [];
   return corsJson({ jobId, offers });
 };
 
-function json(obj, status = 200, extraHeaders = {}) {
-  return new Response(JSON.stringify(obj), {
-    status,
-    headers: { "content-type": "application/json", ...extraHeaders },
-  });
-}
-function corsJson(obj, status = 200) {
-  return json(obj, status, {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
-  });
-}
+// (Optional helper) POST to add an offer (kept simple, useful for testing)
+export const onRequestPost = async ({ request }) => {
+  try {
+    const body = await request.json();
+    const { jobId, offer } = body || {};
+    if (!jobId) return corsJson({ ok:false, error:"Missing jobId" }, 400);
+    const list = offersByJob.get(jobId) || [];
+    if (offer) list.push(offer);
+    offersByJob.set(jobId, list);
+    return corsJson({ ok:true, jobId, count: list.length });
+  } catch (e) {
+    return corsJson({ ok:false, error:String(e) }, 500);
+  }
+};

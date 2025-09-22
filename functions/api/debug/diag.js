@@ -9,11 +9,7 @@ export const onRequestGet = async ({ env }) => {
   for (const k of keys) {
     const present = Object.prototype.hasOwnProperty.call(env, k);
     const value = present ? String(env[k] ?? "") : "";
-    report[k] = {
-      present,
-      nonEmpty: present && value.trim().length > 0,
-      length: value.length
-    };
+    report[k] = { present, nonEmpty: present && value.trim().length > 0, length: value.length };
   }
   return new Response(JSON.stringify(report, null, 2), {
     headers: {
